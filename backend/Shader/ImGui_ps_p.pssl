@@ -1,0 +1,10 @@
+#include "ImGui_shader_common.h"
+
+SamplerState sampler0;
+Texture2D texture0;
+
+float4 main(PS_INPUT input) : S_TARGET_OUTPUT
+{
+	float4 color = input.color * texture0.Sample(sampler0, input.uv);
+	return color;
+}

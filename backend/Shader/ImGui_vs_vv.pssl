@@ -1,0 +1,15 @@
+#include "ImGui_shader_common.h"
+
+ConstantBuffer ShaderConstants
+{
+	column_major matrix m_WorldViewProj;
+};
+
+VS_OUTPUT main(VS_INPUT input)
+{
+	VS_OUTPUT output;
+	output.position = mul(m_WorldViewProj, float4(input.position, 0.0f, 1.0f));
+	output.color = input.color;
+	output.uv = input.uv;
+	return output;
+}
