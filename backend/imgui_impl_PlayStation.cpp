@@ -108,7 +108,7 @@ namespace
 		}
 	};
 
-	static inline sce::Gnm::SizeAlign gnmTextureInitLinear2dA8(sce::Gnm::Texture* gnmTexture, int32_t w, int32_t h)
+	static inline sce::Gnm::SizeAlign gnmTextureInitLinear2d(sce::Gnm::Texture* gnmTexture, int32_t w, int32_t h)
 	{
 		sce::Gnm::TextureSpec textureSpec;
 		int32_t ret;
@@ -233,12 +233,133 @@ namespace
 		sce::Gnmx::generateVsFetchShader(vertexShader.m_fetchShader, &vertexShader.m_shaderModifier, vertexShader.m_shader, nullptr, vertexShader.m_remapTable, kVertexBufferDescs);
 	}
 
-	struct Image
+	// helper class for mouse stuff
+	class MouseProcessor
 	{
-		sce::Gnm::Texture texture;
-		sce::Gnm::Sampler sampler;
+	public:
+		void SetDisplaySize(float w, float h)
+		{
+			displayW = w;
+			displayH = h;
+			absX = displayW * 0.5f;
+			absY = displayH * 0.5f;
+		}
 
-		ImTextureID getTextureID() { return reinterpret_cast<ImTextureID>(this); }
+		// --- Toggles ---
+		void ToggleSensitivity(bool v) { useSensitivity = v; }
+		void ToggleAcceleration(bool v) { useAcceleration = v; }
+		void ToggleSmoothing(bool v) { useSmoothing = v; }
+		void ToggleScaling(bool v) { useScaling = v; }
+
+		// --- Parameters ---
+		void SetSensitivity(float s) { sensitivity = s; }
+		void SetAcceleration(float a) { accelFactor = a; }
+		void SetSmoothing(float s) { smoothing = s; }
+
+		float GetSensitivity() { return sensitivity; }
+		bool GetUseAcceleration() const { return useAcceleration; }
+
+		void ProcessDelta(float dx, float dy)
+		{
+			if (useSensitivity)
+			{
+				ApplySensitivity(dx, dy);
+			}
+
+			if (useAcceleration)
+			{
+				ApplyAcceleration(dx, dy);
+			}
+
+			if (useScaling)
+			{
+				ApplyScaling(dx, dy);
+			}
+
+			if (useSmoothing)
+			{
+				ApplySmoothing(dx, dy);
+			}
+
+			Integrate(dx, dy);
+			ClampToScreen();
+		}
+
+		float X() const { return absX; }
+		float Y() const { return absY; }
+	private:
+		void ApplySensitivity(float& dx, float& dy)
+		{
+			dx *= sensitivity;
+			dy *= sensitivity;
+		}
+
+		void ApplyAcceleration(float& dx, float& dy)
+		{
+			float speed = sqrtf(dx * dx + dy * dy);
+			float accel = 1.0f + speed * accelFactor;
+			dx *= accel;
+			dy *= accel;
+		}
+
+		void ApplyScaling(float& dx, float& dy)
+		{
+			float scale = displayW / 1920.0f;
+			if (scale < 1.0f)
+			{
+				scale = 1.0f;
+			}
+
+			dx *= scale;
+			dy *= scale;
+		}
+
+		void ApplySmoothing(float& dx, float& dy)
+		{
+			smoothedDx = Lerp(smoothedDx, dx, smoothing);
+			smoothedDy = Lerp(smoothedDy, dy, smoothing);
+			dx = smoothedDx;
+			dy = smoothedDy;
+		}
+
+		void Integrate(float dx, float dy)
+		{
+			absX += dx;
+			absY += dy;
+		}
+
+		void ClampToScreen()
+		{
+			absX = Clamp(absX, 0.0f, displayW - 1.0f);
+			absY = Clamp(absY, 0.0f, displayH - 1.0f);
+		}
+
+		static float Lerp(float a, float b, float t)
+		{
+			return a + (b - a) * t;
+		}
+
+		static float Clamp(float v, float lo, float hi)
+		{
+			return v < lo ? lo : (v > hi ? hi : v);
+		}
+
+		// --- State ---
+		float absX = 0.0f;
+		float absY = 0.0f;
+		float smoothedDx = 0.0f;
+		float smoothedDy = 0.0f;
+		float displayW = 1920.0f;
+		float displayH = 1080.0f;
+		float sensitivity = 1.5f;
+		float accelFactor = 0.0f;
+		float smoothing = 1.0f;
+
+		// Toggles
+		bool useSensitivity = true;
+		bool useAcceleration = false;
+		bool useScaling = false;
+		bool useSmoothing = false;
 	};
 }
 
@@ -250,9 +371,9 @@ struct ImGuiMemHandle
 };
 
 //
-static Image		  FontAtlasShaderData;  // <- contains the font's texture and sampler used in the PS shader stage in the final draw
-static ImGuiMemHandle FontAtlasTexData;     // <- contains the font's (garlic allocated texture data and size
-static ImGuiMemHandle FontAtlasMSpaceData;  // <- contains the font's allocate memory space(SceLibcMspace)
+// static PlayStationImage FontAtlasShaderData;  // <- contains the font's texture and sampler used in the PS shader stage in the final draw
+// static ImGuiMemHandle   FontAtlasTexData;     // <- contains the font's (garlic allocated texture data and size
+// static ImGuiMemHandle   FontAtlasMSpaceData;  // <- contains the font's allocate memory space(SceLibcMspace)
 
 //
 static sce::Gnm::IndexSize indexSize = []()
@@ -278,134 +399,6 @@ static sce::Gnm::DataFormat indexFormat = []()
 {
 	return (indexSize == sce::Gnm::IndexSize::kIndexSize16) ? sce::Gnm::kDataFormatR16Uint : sce::Gnm::kDataFormatR32Uint;
 }();
-
-class MouseProcessor
-{
-public:
-	void SetDisplaySize(float w, float h)
-	{
-		displayW = w;
-		displayH = h;
-		absX = displayW * 0.5f;
-		absY = displayH * 0.5f;
-	}
-
-	// --- Toggles ---
-	void ToggleSensitivity(bool v) { useSensitivity = v; }
-	void ToggleAcceleration(bool v) { useAcceleration = v; }
-	void ToggleSmoothing(bool v) { useSmoothing = v; }
-	void ToggleScaling(bool v) { useScaling = v; }
-
-	// --- Parameters ---
-	void SetSensitivity(float s) { sensitivity = s; }
-	void SetAcceleration(float a) { accelFactor = a; }
-	void SetSmoothing(float s) { smoothing = s; }
-
-	float GetSensitivity() { return sensitivity; }
-	bool GetUseAcceleration() const { return useAcceleration; }
-
-	void ProcessDelta(float dx, float dy)
-	{
-		if (useSensitivity)
-		{
-			ApplySensitivity(dx, dy);
-		}
-
-		if (useAcceleration)
-		{
-			ApplyAcceleration(dx, dy);
-		}
-
-		if (useScaling)
-		{
-			ApplyScaling(dx, dy);
-		}
-
-		if (useSmoothing)
-		{
-			ApplySmoothing(dx, dy);
-		}
-
-		Integrate(dx, dy);
-		ClampToScreen();
-	}
-
-	float X() const { return absX; }
-	float Y() const { return absY; }
-private:
-	void ApplySensitivity(float& dx, float& dy)
-	{
-		dx *= sensitivity;
-		dy *= sensitivity;
-	}
-
-	void ApplyAcceleration(float& dx, float& dy)
-	{
-		float speed = sqrtf(dx * dx + dy * dy);
-		float accel = 1.0f + speed * accelFactor;
-		dx *= accel;
-		dy *= accel;
-	}
-
-	void ApplyScaling(float& dx, float& dy)
-	{
-		float scale = displayW / 1920.0f;
-		if (scale < 1.0f)
-		{
-			scale = 1.0f;
-		}
-
-		dx *= scale;
-		dy *= scale;
-	}
-
-	void ApplySmoothing(float& dx, float& dy)
-	{
-		smoothedDx = Lerp(smoothedDx, dx, smoothing);
-		smoothedDy = Lerp(smoothedDy, dy, smoothing);
-		dx = smoothedDx;
-		dy = smoothedDy;
-	}
-
-	void Integrate(float dx, float dy)
-	{
-		absX += dx;
-		absY += dy;
-	}
-
-	void ClampToScreen()
-	{
-		absX = Clamp(absX, 0.0f, displayW - 1.0f);
-		absY = Clamp(absY, 0.0f, displayH - 1.0f);
-	}
-
-	static float Lerp(float a, float b, float t)
-	{
-		return a + (b - a) * t;
-	}
-
-	static float Clamp(float v, float lo, float hi)
-	{
-		return v < lo ? lo : (v > hi ? hi : v);
-	}
-
-	// --- State ---
-	float absX = 0.0f;
-	float absY = 0.0f;
-	float smoothedDx = 0.0f;
-	float smoothedDy = 0.0f;
-	float displayW = 1920.0f;
-	float displayH = 1080.0f;
-	float sensitivity = 1.5f;
-	float accelFactor = 0.0f;
-	float smoothing = 1.0f;
-
-	// Toggles
-	bool useSensitivity = true;
-	bool useAcceleration = false;
-	bool useScaling = false;
-	bool useSmoothing = false;
-};
 
 struct ImGui_ImplPlayStation_RenderBuffers
 {
@@ -446,6 +439,9 @@ struct ImGui_ImplPlayStation_Data
 	EmbeddedPsShader      pixelShader{};
 
 	//
+	sce::Gnm::Sampler texSampler;
+
+	//
 	void*		  MspaceHeapBacking = nullptr;
 	SceLibcMspace MspaceHandle = nullptr;
 
@@ -456,14 +452,6 @@ struct ImGui_ImplPlayStation_Data
 	//
 	int64_t Time = 0;
 	int64_t TicksPerSecond = 0;
-
-	//
-	bool WantUpdateHasGamepad = true;
-	bool HasGamepad = true;
-	
-	//
-	float CurrentMouseCursorX = 0.0f, CurrentMouseCursorY = 0.0f;
-	float LastMouseCursorX = 0.0f, LastMouseCursorY = 0.0f;
 };
 
 static inline ImGui_ImplPlayStation_Data* ImGui_ImplPlayStation_GetBackendData() { return ImGui::GetCurrentContext() ? (ImGui_ImplPlayStation_Data*)ImGui::GetIO().BackendPlatformUserData : nullptr; }
@@ -496,15 +484,32 @@ static bool ImGui_ImplPlayStation_InitEx(ImGui_InitUserData& a_args, unsigned in
 	ImGuiIO& io = ImGui::GetIO();
 	IM_ASSERT(io.BackendPlatformUserData == nullptr && "Already initialized a platform backend!");
 	io.BackendPlatformUserData = (void*)bd;
-	io.BackendPlatformName = "imgui_impl_PlayStation";
-	io.BackendFlags |= (ImGuiBackendFlags_HasGamepad | ImGuiBackendFlags_RendererHasVtxOffset);
-	io.ConfigFlags |= (ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NoMouseCursorChange);
-	io.DisplaySize = ImVec2(static_cast<float>(width), static_cast<float>(height));
-	io.MouseDrawCursor = true;
+	
+	//
+	io.BackendPlatformName = "Orbis";
+
+	//
+	io.BackendRendererName = "Gnm/x";
+	
+	//
 	io.IniFilename = "/data/imgui.ini";
+
+	//
 	io.LogFilename = "/data/imgui_log.log";
 
-	// Setup pixel shader
+	//
+	io.BackendFlags |= (ImGuiBackendFlags_HasGamepad | ImGuiBackendFlags_RendererHasVtxOffset);
+
+	//
+	io.ConfigFlags |= (ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NoMouseCursorChange);
+
+	// this obviously never changes but in thoery games could close and re-open the main video out port... maybe look into if dyanmic support for this is really needed...
+	io.DisplaySize = ImVec2(static_cast<float>(width), static_cast<float>(height));
+
+	// techneclly we *could* use video out's cursor functions but this requires a videout handle which we do not always have and making that a *requirement* seems like a annoyance if you are running this in a plugin that has no need to interace with the game code.
+	io.MouseDrawCursor = true;                                                                                                         
+
+	// setup pixel shader
 	{
 		static const unsigned int s_pixelShader[/* bytes = 488 */] =
 		{
@@ -516,7 +521,7 @@ static bool ImGui_ImplPlayStation_InitEx(ImGui_InitUserData& a_args, unsigned in
 		bd->pixelShader.initializeWithAllocators(bd->allocators);
 	}
 
-	// Setup vertex shader
+	// setup vertex shader
 	{
 		static const unsigned int s_vertexShader[/* bytes = 632 */] =
 		{
@@ -535,7 +540,16 @@ static bool ImGui_ImplPlayStation_InitEx(ImGui_InitUserData& a_args, unsigned in
 			fprintf(stdout, "input[%u]: semantic=%u vgpr=%u size=%u", i, s.m_semantic, s.m_vgpr, s.m_sizeInElements);
 		}
 #endif
+
+		// gnm/x requires a fetch shader for the vertex shader
 		BuildFetchShader(bd->allocators, bd->vertexShader);
+	}
+
+	// setup sampler
+	{
+		auto& fontSampler = bd->texSampler;
+		fontSampler.init();
+		fontSampler.setXyFilterMode(sce::Gnm::FilterMode::kFilterModeBilinear, sce::Gnm::FilterMode::kFilterModeBilinear);
 	}
 
 	// create fonts atlas.
@@ -560,7 +574,7 @@ static bool ImGui_ImplPlayStation_InitEx(ImGui_InitUserData& a_args, unsigned in
 
 		//
 		ImGuiLibFont::BuildFontAtlas(io.Fonts, bd->MspaceHandle);
-		FontAtlasMSpaceData = { bd->MspaceHeapBacking, sizeAlign.m_size, sizeAlign.m_align };
+		// FontAtlasMSpaceData = { bd->MspaceHeapBacking, sizeAlign.m_size, sizeAlign.m_align };
 	}
 
 	// create fonts texture.
@@ -568,10 +582,13 @@ static bool ImGui_ImplPlayStation_InitEx(ImGui_InitUserData& a_args, unsigned in
 		unsigned char* pixels;
 		int32_t width, height;
 
+		PlayStationImage* psImage = IM_NEW(PlayStationImage)();
+		psImage->texture = IM_NEW(sce::Gnm::Texture)();
+
 		// Load as RGBA 32-bits (75% of the memory is wasted, but default font is so small) because it is more likely to be compatible with user's existing shaders. If your ImTextureId represent a higher-level concept than just a GL texture id, consider calling GetTexDataAsAlpha8() instead to save on GPU memory.
 		io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-		auto& texture = FontAtlasShaderData.texture;
-		auto sizeAlign = gnmTextureInitLinear2dA8(&FontAtlasShaderData.texture, width, height);
+		auto& texture = *psImage->texture;
+		auto sizeAlign = gnmTextureInitLinear2d(&texture, width, height);
 
 		//
 		auto texData = bd->allocators.garlic.allocate(sizeAlign.m_size, sizeAlign.m_align);
@@ -580,8 +597,8 @@ static bool ImGui_ImplPlayStation_InitEx(ImGui_InitUserData& a_args, unsigned in
 		texture.setResourceMemoryType(sce::Gnm::kResourceMemoryTypeRO);
 
 		//
-		io.Fonts->TexID = FontAtlasShaderData.getTextureID();
-		FontAtlasTexData = { texData, sizeAlign.m_size, sizeAlign.m_align };
+		io.Fonts->TexID = psImage->TextureID();
+		// FontAtlasTexData = { texData, sizeAlign.m_size, sizeAlign.m_align };
 	}
 
 #if _DEBUG
@@ -835,6 +852,9 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_NewFrame()
 	}
 }
 
+/*
+	-- Draw using a DrawCommandBuffer
+*/
 IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiDrawCommandBuffer& dcb, ImDrawData* draw_data)
 {
 	ImGui_ImplPlayStation_Data* bd = ImGui_ImplPlayStation_GetBackendData();
@@ -910,12 +930,6 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiDrawCommandBuffer&
 	vbTable[1].setResourceMemoryType(sce::Gnm::kResourceMemoryTypeRO);
 	vbTable[2].setResourceMemoryType(sce::Gnm::kResourceMemoryTypeRO);
 
-	//
-	auto& fontTexture = FontAtlasShaderData.texture;
-	auto& fontSampler = FontAtlasShaderData.sampler;
-	fontSampler.init();
-	fontSampler.setXyFilterMode(sce::Gnm::FilterMode::kFilterModeBilinear, sce::Gnm::FilterMode::kFilterModeBilinear);
-
 	// Setup Pipline stuff
 	sce::Gnm::BlendControl blendState;
 	blendState.init();
@@ -981,10 +995,8 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiDrawCommandBuffer&
 		dcb.setPointerInUserData(sce::Gnm::ShaderStage::kShaderStageVs, regVB, vbTable);
 	if (regCB != 0xFFFFFFFF)
 		dcb.setVsharpInUserData(sce::Gnm::ShaderStage::kShaderStageVs, regCB, &constantBuffer);
-	if (regTex != 0xFFFFFFFF)
-		dcb.setTsharpInUserData(sce::Gnm::ShaderStage::kShaderStagePs, regTex, std::addressof(fontTexture));
 	if (regSamp != 0xFFFFFFFF)
-		dcb.setSsharpInUserData(sce::Gnm::ShaderStage::kShaderStagePs, regSamp, std::addressof(fontSampler));
+		dcb.setSsharpInUserData(sce::Gnm::ShaderStage::kShaderStagePs, regSamp, std::addressof(bd->texSampler));
 
 	uint32_t psInputs[32];
 	sce::Gnm::generatePsShaderUsageTable(psInputs, vs->getExportSemanticTable(), vs->m_numExportSemantics, ps->getPixelInputSemanticTable(), ps->m_numInputSemantics);
@@ -1049,7 +1061,6 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiDrawCommandBuffer&
 			ImVec2 clip_max(pcmd->ClipRect.z - clip_off.x, pcmd->ClipRect.w - clip_off.y);
 			if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
 				continue;
-
 #if _DEBUG
 			PRINT_FMT_VA
 			(
@@ -1057,13 +1068,22 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiDrawCommandBuffer&
 				"left -> %d\n"
 				"top -> %d\n"
 				"right -> %d\n"
-				"bottom -> %d\n", 
-				(int)clip_min.x, 
-				(int)clip_min.y, 
-				(int)clip_max.x, 
+				"bottom -> %d\n",
+				(int)clip_min.x,
+				(int)clip_min.y,
+				(int)clip_max.x,
 				(int)clip_max.y
-			)
+			);
 #endif
+			//
+			if (regTex != 0xFFFFFFFF)
+			{
+				PlayStationImage* psImage = (PlayStationImage*)pcmd->GetTexID();
+				if (psImage)
+				{
+					dcb.setTsharpInUserData(sce::Gnm::ShaderStage::kShaderStagePs, regTex, psImage->texture);
+				}
+			}
 
 			//
 			const uint32_t startIndex = indexBufferOffset + pcmd->IdxOffset;
@@ -1080,6 +1100,9 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiDrawCommandBuffer&
 #endif
 }
 
+/*
+	-- Draw uisng a graphics context (event with a graphics context you can just call ImGui_ImplPlayStation_RenderDrawData(&gfxCtx.m_dcb, ..) and it should work)
+*/
 IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiGfxContext& gfxCtx, ImDrawData* draw_data)
 {
 	ImGui_ImplPlayStation_Data* bd = ImGui_ImplPlayStation_GetBackendData();
@@ -1154,12 +1177,6 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiGfxContext& gfxCtx
 	vertexBuffer[1].setResourceMemoryType(sce::Gnm::kResourceMemoryTypeRO); // R
 	vertexBuffer[2].setResourceMemoryType(sce::Gnm::kResourceMemoryTypeRO); // R
 
-	//
-	auto& fontTexture = FontAtlasShaderData.texture;
-	auto& fontSampler = FontAtlasShaderData.sampler;
-	fontSampler.init();
-	fontSampler.setXyFilterMode(sce::Gnm::FilterMode::kFilterModeBilinear, sce::Gnm::FilterMode::kFilterModeBilinear);
-
 	// Setup Pipline stuff
 	sce::Gnm::BlendControl blendState;
 	blendState.init();
@@ -1219,8 +1236,7 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiGfxContext& gfxCtx
 	gfxCtx.setPsShaderUsage(psInputs, ps.m_shader->m_numInputSemantics);
 	gfxCtx.setVertexBuffers(sce::Gnm::ShaderStage::kShaderStageVs, 0, 3, vertexBuffer);
 	gfxCtx.setConstantBuffers(sce::Gnm::ShaderStage::kShaderStageVs, 0, 1, &constantBuffer);
-	gfxCtx.setTextures(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, std::addressof(fontTexture));
-	gfxCtx.setSamplers(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, std::addressof(fontSampler));	
+	gfxCtx.setSamplers(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, std::addressof(bd->texSampler));	
 	gfxCtx.setIndexSize(indexSize);
 	gfxCtx.setIndexCount(draw_data->TotalIdxCount);
 	gfxCtx.setIndexBuffer(indexBuffer.getBaseAddress());
@@ -1284,6 +1300,14 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiGfxContext& gfxCtx
 			);
 #endif
 
+			//
+			PlayStationImage* psImage = (PlayStationImage*)pcmd->GetTexID();
+			if (psImage)
+			{
+				gfxCtx.setTextures(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, psImage->texture);
+			}
+
+			//
 			const uint32_t startIndex = indexBufferOffset + pcmd->IdxOffset;
 			gfxCtx.setScreenScissor((int)clip_min.x, (int)clip_min.y, (int)clip_max.x, (int)clip_max.y);
 			gfxCtx.drawIndexOffset(startIndex, pcmd->ElemCount);
@@ -1298,6 +1322,9 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiGfxContext& gfxCtx
 #endif
 }
 
+/*
+	-- Draw uisng a lightweight graphics context (event with a graphics context you can just call ImGui_ImplPlayStation_RenderDrawData(&gfxCtx.m_dcb, ..) and it should work)
+*/
 IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiLightweightGfxContext& gfxCtx, ImDrawData* draw_data)
 {
 	// UNTESTED..
@@ -1373,12 +1400,6 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiLightweightGfxCont
 	vertexBuffer[1].setResourceMemoryType(sce::Gnm::kResourceMemoryTypeRO); // R
 	vertexBuffer[2].setResourceMemoryType(sce::Gnm::kResourceMemoryTypeRO); // R
 
-	//
-	auto& fontTexture = FontAtlasShaderData.texture;
-	auto& fontSampler = FontAtlasShaderData.sampler;
-	fontSampler.init();
-	fontSampler.setXyFilterMode(sce::Gnm::FilterMode::kFilterModeBilinear, sce::Gnm::FilterMode::kFilterModeBilinear);
-
 	// Setup Pipline stuff
 	sce::Gnm::BlendControl blendState;
 	blendState.init();
@@ -1439,8 +1460,7 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiLightweightGfxCont
 	gfxCtx.setPsShaderUsage(psInputs, ps.m_shader->m_numInputSemantics);
 	gfxCtx.setVertexBuffers(sce::Gnm::ShaderStage::kShaderStageVs, 0, 3, vertexBuffer);
 	gfxCtx.setConstantBuffers(sce::Gnm::ShaderStage::kShaderStageVs, 0, 1, &constantBuffer);
-	gfxCtx.setTextures(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, std::addressof(fontTexture));
-	gfxCtx.setSamplers(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, std::addressof(fontSampler));
+	gfxCtx.setSamplers(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, std::addressof(bd->texSampler));
 	gfxCtx.setIndexSize(indexSize);
 	gfxCtx.setIndexCount(draw_data->TotalIdxCount);
 	gfxCtx.setIndexBuffer(indexBuffer.getBaseAddress());
@@ -1500,9 +1520,16 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiLightweightGfxCont
 				(int)clip_min.y,
 				(int)clip_max.x,
 				(int)clip_max.y
-			)
+			);
 #endif
+			//
+			PlayStationImage* psImage = (PlayStationImage*)pcmd->GetTexID();
+			if (psImage)
+			{
+				gfxCtx.setTextures(sce::Gnm::ShaderStage::kShaderStagePs, 0, 1, psImage->texture);
+			}
 
+			//
 			const uint32_t startIndex = indexBufferOffset + pcmd->IdxOffset;
 			gfxCtx.setScreenScissor((int)clip_min.x, (int)clip_min.y, (int)clip_max.x, (int)clip_max.y);
 			gfxCtx.drawIndexOffset(startIndex, pcmd->ElemCount);
@@ -1517,6 +1544,9 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_RenderDrawData(ImGuiLightweightGfxCont
 #endif
 }
 
+/*
+	-- Helper that'll process the deltas then send a pos event
+*/
 IMGUI_IMPL_API void ImGui_ImplPlayStation_AddMouseEvent(float x, float y, float z)
 {
 	//
@@ -1531,6 +1561,7 @@ IMGUI_IMPL_API void ImGui_ImplPlayStation_AddMouseEvent(float x, float y, float 
 	io.AddMousePosEvent(bd->mouseProcessor.X(), bd->mouseProcessor.Y());
 }
 
+#ifndef NDEBUG
 IMGUI_IMPL_API void ImGui_ImplPlayStation_SetSensitivity(float ft)
 {
 	//
@@ -1571,5 +1602,6 @@ IMGUI_IMPL_API bool ImGui_ImplPlayStation_GetMouseAccelerationEnabled()
 	ImGui_ImplPlayStation_Data* bd = ImGui_ImplPlayStation_GetBackendData();
 	return bd->mouseProcessor.GetUseAcceleration();
 }
+#endif
 
 #endif
